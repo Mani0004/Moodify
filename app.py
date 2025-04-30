@@ -351,7 +351,6 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### Your Mood History")
-    history = db.get_user_history(st.session_state.user_id)
     
     mood_border_colors = {
         "Happy": "#4CAF50",
