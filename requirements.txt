@@ -1,6 +1,5 @@
 streamlit
 python-dotenv
 google-genai
-pymongo
 requests
 datetime
