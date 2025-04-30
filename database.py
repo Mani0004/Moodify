@@ -1,63 +1,76 @@
-from pymongo import MongoClient
 from datetime import datetime
+import json
 import os
-from dotenv import load_dotenv
-from urllib.parse import quote_plus
-
-load_dotenv()
+import time
 
 class Database:
     def __init__(self):
         try:
-            # Properly escape credentials
-            username = quote_plus(os.getenv("MONGO_USERNAME"))
-            password = quote_plus(os.getenv("MONGO_PASSWORD"))
-            cluster = os.getenv("MONGO_CLUSTER")
+            # Create data directory if it doesn't exist
+            self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+            self.conversations_file = os.path.join(self.data_dir, "conversations.json")
+            self.recommendations_file = os.path.join(self.data_dir, "recommendations.json")
             
-            self.uri = f"mongodb+srv://{username}:{password}@{cluster}/?retryWrites=true&w=majority"
+            # Initialize data storage
+            os.makedirs(self.data_dir, exist_ok=True)
             
-            self.client = MongoClient(
-                self.uri,
-                connectTimeoutMS=30000,
-                serverSelectionTimeoutMS=50000,
-                srvServiceName='mongodb'
-            )
+            # Initialize empty files if they don't exist
+            if not os.path.exists(self.conversations_file):
+                with open(self.conversations_file, "w") as f:
+                    json.dump([], f)
             
-            # Test connection
-            self.client.admin.command('ping')
-            print("Successfully connected to MongoDB!")
-            
-            self.db = self.client["mood_music_db"]
-            self.conversations = self.db["conversations"]
-            self.recommendations = self.db["recommendations"]
-            
+            if not os.path.exists(self.recommendations_file):
+                with open(self.recommendations_file, "w") as f:
+                    json.dump([], f)
+                    
+            print("Local file database initialized at", self.data_dir)
         except Exception as e:
-            print(f"Database connection failed: {e}")
-            raise
+            print(f"Error initializing database: {e}")
+
+    def _read_json_file(self, file_path):
+        """Helper method to read JSON file"""
+        try:
+            with open(file_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error reading file {file_path}: {e}")
+            return []
+
+    def _write_json_file(self, file_path, data):
+        """Helper method to write JSON file"""
+        try:
+            with open(file_path, "w") as f:
+                json.dump(data, f, default=str)
+            return True
+        except Exception as e:
+            print(f"Error writing file {file_path}: {e}")
+            return False
 
     def save_conversation(self, user_id, messages):
-        """Save conversation history to database"""
+        """Save conversation history to file"""
         try:
-            self.conversations.insert_one({
+            conversations = self._read_json_file(self.conversations_file)
+            conversations.append({
                 "user_id": user_id,
                 "messages": messages,
-                "timestamp": datetime.now()
+                "timestamp": datetime.now().isoformat()
             })
-            return True
+            return self._write_json_file(self.conversations_file, conversations)
         except Exception as e:
             print(f"Error saving conversation: {e}")
             return False
 
     def save_recommendation(self, user_id, mood, recommendations):
-        """Save music recommendations to database"""
+        """Save music recommendations to file"""
         try:
-            self.recommendations.insert_one({
+            recs = self._read_json_file(self.recommendations_file)
+            recs.append({
                 "user_id": user_id,
                 "mood": mood,
                 "recommendations": recommendations,
-                "timestamp": datetime.now()
+                "timestamp": datetime.now().isoformat()
             })
-            return True
+            return self._write_json_file(self.recommendations_file, recs)
         except Exception as e:
             print(f"Error saving recommendation: {e}")
             return False
@@ -65,10 +78,20 @@ class Database:
     def get_user_history(self, user_id, limit=5):
         """Get user's mood history"""
         try:
-            return list(self.recommendations.find(
-                {"user_id": user_id},
-                {"_id": 0, "mood": 1, "timestamp": 1, "recommendations": 1}
-            ).sort("timestamp", -1).limit(limit))
+            recs = self._read_json_file(self.recommendations_file)
+            # Filter by user_id
+            user_recs = [r for r in recs if r["user_id"] == user_id]
+            # Sort by timestamp (newest first)
+            user_recs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            # Convert timestamps back to datetime objects
+            for rec in user_recs[:limit]:
+                if isinstance(rec["timestamp"], str):
+                    try:
+                        rec["timestamp"] = datetime.fromisoformat(rec["timestamp"])
+                    except ValueError:
+                        # If parsing fails, create a datetime object
+                        rec["timestamp"] = datetime.now()
+            return user_recs[:limit]
         except Exception as e:
             print(f"Error getting user history: {e}")
             return []
@@ -76,21 +99,45 @@ class Database:
     def get_conversation_history(self, user_id, limit=1):
         """Get user's conversation history"""
         try:
-            return list(self.conversations.find(
-                {"user_id": user_id},
-                {"_id": 0, "messages": 1, "timestamp": 1}
-            ).sort("timestamp", -1).limit(limit))
+            conversations = self._read_json_file(self.conversations_file)
+            # Filter by user_id
+            user_convos = [c for c in conversations if c["user_id"] == user_id]
+            # Sort by timestamp (newest first)
+            user_convos.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            # Return limited number of conversations
+            return user_convos[:limit]
         except Exception as e:
             print(f"Error getting conversation history: {e}")
             return []
 
     def close_connection(self):
-        """Close database connection"""
-        try:
-            self.client.close()
-            print("Database connection closed")
-        except Exception as e:
-            print(f"Error closing connection: {e}")
+        """No connection to close in file-based storage"""
+        pass
 
 # Create database instance
-db = Database()
+try:
+    db = Database()
+except Exception as e:
+    print(f"Failed to initialize database: {e}")
+    # Provide a fallback database that doesn't crash the application
+    class FallbackDatabase:
+        def get_user_history(self, user_id, limit=5):
+            print("Using fallback database - unable to get history")
+            return []
+        
+        def save_conversation(self, user_id, messages):
+            print("Using fallback database - unable to save conversation")
+            return False
+        
+        def save_recommendation(self, user_id, mood, recommendations):
+            print("Using fallback database - unable to save recommendation")
+            return False
+        
+        def get_conversation_history(self, user_id, limit=1):
+            print("Using fallback database - unable to get conversation history")
+            return []
+        
+        def close_connection(self):
+            pass
+    
+    db = FallbackDatabase()
