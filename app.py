@@ -3,7 +3,6 @@ from datetime import datetime, timedelta
 import time
 from mood_analyzer import MoodAnalyzer
 from music_recommender import MusicRecommender
-from database import db
 import os
 from dotenv import load_dotenv
 import random
